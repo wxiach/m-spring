@@ -1,19 +1,18 @@
 package com.mspring.aop;
 
 import com.mspring.aop.Advisor.AdviceType;
+import com.mspring.aop.annotation.Aspect;
 import com.mspring.beans.config.BeanDefinition;
 import com.mspring.beans.config.InstantiationAwareBeanPostProcessor;
 import com.mspring.beans.factory.BeanFactory;
 import com.mspring.core.AnnotationUtils;
 import com.mspring.core.Ordered;
 
-import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Function;
 
 /**
  * AOP 代理处理器：为匹配切点的 Bean 创建代理；循环依赖场景下通过早期引用提前生成代理。
@@ -23,14 +22,13 @@ import java.util.function.Function;
 public class AspectProxyProcessor implements InstantiationAwareBeanPostProcessor, Ordered {
 
     private final BeanFactory beanFactory;
-    private final ProxyFactory proxyFactory = new ProxyFactory();
     private final Map<String, Object> proxyCache = new ConcurrentHashMap<>();
-    private List<Advisor> advisors;
-    // 通知列表构建中创建的 Bean（切面及其依赖）不做代理判断，避免递归触发自身
-    private boolean initializing;
+    private final List<Advisor> advisors;
 
     public AspectProxyProcessor(BeanFactory beanFactory) {
         this.beanFactory = beanFactory;
+        // 构造时构建通知列表：此刻本处理器尚未注册，getBean 不会回调到这里
+        this.advisors = buildAdvisors();
     }
 
     // ---------------------------------------------------------------------
@@ -62,19 +60,16 @@ public class AspectProxyProcessor implements InstantiationAwareBeanPostProcessor
             return cached;
         }
         Class<?> beanClass = bean.getClass();
+        // 切面自身不代理
         if (beanClass.isAnnotationPresent(Aspect.class)) {
             return bean;
         }
-        List<Advisor> matched = new ArrayList<>();
-        for (Advisor advisor : advisors()) {
-            if (advisor.pointcut().matches(beanClass)) {
-                matched.add(advisor);
-            }
-        }
+        List<Advisor> matched = advisors.stream().filter(advisor -> advisor.pointcut().matches(beanClass)).toList();
         if (matched.isEmpty()) {
             return bean;
         }
-        Object proxy = proxyFactory.createProxy(bean, matched);
+        // 只缓存生成的代理，未代理的 Bean（切面、无匹配、原型）不进缓存
+        Object proxy = ProxyFactory.createProxy(bean, matched);
         proxyCache.put(beanName, proxy);
         return proxy;
     }
@@ -83,42 +78,30 @@ public class AspectProxyProcessor implements InstantiationAwareBeanPostProcessor
     // 通知器（Advisor）构建
     // ---------------------------------------------------------------------
 
-    private List<Advisor> advisors() {
-        if (advisors == null) {
-            if (initializing) {
-                return List.of();
-            }
-            initializing = true;
-            try {
-                advisors = buildAdvisors();
-            } finally {
-                initializing = false;
-            }
-        }
-        return advisors;
-    }
-
     private List<Advisor> buildAdvisors() {
         List<Advisor> result = new ArrayList<>();
         for (BeanDefinition definition : beanFactory.getBeanDefinitions()) {
-            Class<?> aspectClass = definition.beanClass();
-            if (!aspectClass.isAnnotationPresent(Aspect.class)) {
+            if (!definition.beanClass().isAnnotationPresent(Aspect.class)) {
                 continue;
             }
-            Object aspect = beanFactory.getBean(definition.beanName());
-            collect(result, aspectClass, aspect, Before.class, AdviceType.BEFORE, Before::value);
-            collect(result, aspectClass, aspect, AfterReturning.class, AdviceType.AFTER_RETURNING, AfterReturning::value);
-            collect(result, aspectClass, aspect, AfterThrowing.class, AdviceType.AFTER_THROWING, AfterThrowing::value);
-            collect(result, aspectClass, aspect, Around.class, AdviceType.AROUND, Around::value);
+            result.addAll(advisorsOf(definition));
         }
         return result;
     }
 
-    private <A extends Annotation> void collect(List<Advisor> result, Class<?> aspectClass, Object aspect,
-                                                Class<A> annotationType, AdviceType type, Function<A, String> pointcut) {
-        for (Method method : AnnotationUtils.findMethodsAnnotatedWith(aspectClass, annotationType)) {
-            result.add(new Advisor(new PointcutExpression(pointcut.apply(method.getAnnotation(annotationType))),
-                    type, aspect, method));
+    // 收集一个切面类上的全部通知
+    private List<Advisor> advisorsOf(BeanDefinition definition) {
+        Object aspect = beanFactory.getBean(definition.beanName());
+        List<Advisor> advisors = new ArrayList<>();
+        for (AdviceType type : AdviceType.values()) {
+            for (Method method : AnnotationUtils.findMethodsAnnotatedWith(definition.beanClass(), type.annotation())) {
+                // 启动时校验通知方法签名，运行期不再检查
+                if (!type.accepts(method)) {
+                    throw new IllegalStateException(type + " 通知方法签名不符合固定参数约定：" + method);
+                }
+                advisors.add(new Advisor(new PointcutExpression(type.pointcutOf(method)), type, aspect, method));
+            }
         }
+        return advisors;
     }
 }

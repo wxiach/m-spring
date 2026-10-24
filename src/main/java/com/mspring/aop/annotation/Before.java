@@ -1,4 +1,4 @@
-package com.mspring.aop;
+package com.mspring.aop.annotation;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
@@ -6,11 +6,13 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * 标记一个类为切面：其中的通知方法会被织入匹配的切点。
+ * 前置通知：目标方法执行前执行。
  *
  * @author wxiach <wxiach@gmail.com> 2026/10/23
  */
-@Target(ElementType.TYPE)
+@Target(ElementType.METHOD)
 @Retention(RetentionPolicy.RUNTIME)
-public @interface Aspect {
+public @interface Before {
+
+    String value();
 }
