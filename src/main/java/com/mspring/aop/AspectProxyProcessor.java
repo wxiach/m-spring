@@ -1,15 +1,11 @@
 package com.mspring.aop;
 
 import com.mspring.aop.Advisor.AdviceType;
-import com.mspring.annotation.AfterReturning;
-import com.mspring.annotation.AfterThrowing;
-import com.mspring.annotation.Around;
-import com.mspring.annotation.Aspect;
-import com.mspring.annotation.Before;
-import com.mspring.core.BeanDefinition;
-import com.mspring.core.BeanFactory;
-import com.mspring.processor.InstantiationAwareBeanPostProcessor;
+import com.mspring.beans.config.BeanDefinition;
+import com.mspring.beans.config.InstantiationAwareBeanPostProcessor;
+import com.mspring.beans.factory.BeanFactory;
 import com.mspring.core.AnnotationUtils;
+import com.mspring.core.Ordered;
 
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
@@ -19,7 +15,12 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
-public class AspectProxyProcessor implements InstantiationAwareBeanPostProcessor {
+/**
+ * AOP 代理处理器：为匹配切点的 Bean 创建代理；循环依赖场景下通过早期引用提前生成代理。
+ *
+ * @author wxiach <wxiach@gmail.com> 2026/10/23
+ */
+public class AspectProxyProcessor implements InstantiationAwareBeanPostProcessor, Ordered {
 
     private final BeanFactory beanFactory;
     private final ProxyFactory proxyFactory = new ProxyFactory();
@@ -32,6 +33,15 @@ public class AspectProxyProcessor implements InstantiationAwareBeanPostProcessor
         this.beanFactory = beanFactory;
     }
 
+    // ---------------------------------------------------------------------
+    // BeanPostProcessor 回调
+    // ---------------------------------------------------------------------
+
+    @Override
+    public int getOrder() {
+        return Ordered.LOWEST_PRECEDENCE;
+    }
+
     @Override
     public Object postProcessAfterInitialization(Object bean, String beanName) {
         return wrapIfNecessary(bean, beanName);
@@ -41,6 +51,10 @@ public class AspectProxyProcessor implements InstantiationAwareBeanPostProcessor
     public Object getEarlyBeanReference(Object bean, String beanName) {
         return wrapIfNecessary(bean, beanName);
     }
+
+    // ---------------------------------------------------------------------
+    // 代理包装
+    // ---------------------------------------------------------------------
 
     private Object wrapIfNecessary(Object bean, String beanName) {
         Object cached = proxyCache.get(beanName);
@@ -60,10 +74,14 @@ public class AspectProxyProcessor implements InstantiationAwareBeanPostProcessor
         if (matched.isEmpty()) {
             return bean;
         }
-        Object proxy = proxyFactory.createProxy(bean, beanClass, matched);
+        Object proxy = proxyFactory.createProxy(bean, matched);
         proxyCache.put(beanName, proxy);
         return proxy;
     }
+
+    // ---------------------------------------------------------------------
+    // 通知器（Advisor）构建
+    // ---------------------------------------------------------------------
 
     private List<Advisor> advisors() {
         if (advisors == null) {
@@ -82,7 +100,7 @@ public class AspectProxyProcessor implements InstantiationAwareBeanPostProcessor
 
     private List<Advisor> buildAdvisors() {
         List<Advisor> result = new ArrayList<>();
-        for (BeanDefinition definition : beanFactory.beanDefinitions()) {
+        for (BeanDefinition definition : beanFactory.getBeanDefinitions()) {
             Class<?> aspectClass = definition.beanClass();
             if (!aspectClass.isAnnotationPresent(Aspect.class)) {
                 continue;

@@ -15,7 +15,16 @@ import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * 基于 ByteBuddy 创建代理：拦截匹配切点的方法，按通知类型织入切面逻辑。
+ *
+ * @author wxiach <wxiach@gmail.com> 2026/10/23
+ */
 public class ProxyFactory {
+
+    // ---------------------------------------------------------------------
+    // 构造器处理
+    // ---------------------------------------------------------------------
 
     private static Constructor<?> chooseConstructor(Class<?> proxyClass) {
         Constructor<?>[] constructors = proxyClass.getDeclaredConstructors();
@@ -66,7 +75,12 @@ public class ProxyFactory {
         return 0D;
     }
 
-    public Object createProxy(Object target, Class<?> targetClass, List<Advisor> advisors) {
+    // ---------------------------------------------------------------------
+    // 代理创建
+    // ---------------------------------------------------------------------
+
+    public Object createProxy(Object target, List<Advisor> advisors) {
+        Class<?> targetClass = target.getClass();
         if (Modifier.isFinal(targetClass.getModifiers())) {
             throw new IllegalStateException("final 类无法生成子类代理：" + targetClass.getName());
         }
@@ -98,9 +112,13 @@ public class ProxyFactory {
             this.advisors = advisors;
         }
 
-        private static void requireJoinPointParameter(Method advice) {
-            if (!advice.getParameterTypes()[0].isAssignableFrom(JoinPoint.class)) {
-                throw new IllegalStateException("通知方法的第一个参数必须是 JoinPoint：" + advice);
+        // ---------------------------------------------------------------------
+        // 拦截入口
+        // ---------------------------------------------------------------------
+
+        private static void requireJoinPointParameter(Method adviceMethod) {
+            if (!adviceMethod.getParameterTypes()[0].isAssignableFrom(JoinPoint.class)) {
+                throw new IllegalStateException("通知方法的第一个参数必须是 JoinPoint：" + adviceMethod);
             }
         }
 
@@ -140,6 +158,10 @@ public class ProxyFactory {
             return result;
         }
 
+        // ---------------------------------------------------------------------
+        // 目标与通知调用
+        // ---------------------------------------------------------------------
+
         private Object proceed(List<Advisor> matched, Method method, Object[] args) throws Throwable {
             ProceedingJoinPoint.Invocation invocation = () -> invokeTarget(method, args);
             for (int i = matched.size() - 1; i >= 0; i--) {
@@ -164,37 +186,37 @@ public class ProxyFactory {
         /**
          * 通知方法签名为零参、(JoinPoint) 或 (JoinPoint, 上下文)，上下文即返回值（@AfterReturning）或异常（@AfterThrowing）
          */
-        private void invokeAdvice(Advisor advisor, JoinPoint joinPoint, Object context) throws Throwable {
-            Method advice = advisor.adviceMethod();
-            switch (advice.getParameterCount()) {
-                case 0 -> invoke(advisor);
+        private void invokeAdvice(Advisor advisor, JoinPoint joinPoint, Object outcome) throws Throwable {
+            Method adviceMethod = advisor.adviceMethod();
+            switch (adviceMethod.getParameterCount()) {
+                case 0 -> invokeAdviceMethod(advisor);
                 case 1 -> {
-                    requireJoinPointParameter(advice);
-                    invoke(advisor, joinPoint);
+                    requireJoinPointParameter(adviceMethod);
+                    invokeAdviceMethod(advisor, joinPoint);
                 }
                 case 2 -> {
-                    requireJoinPointParameter(advice);
-                    invoke(advisor, joinPoint, context);
+                    requireJoinPointParameter(adviceMethod);
+                    invokeAdviceMethod(advisor, joinPoint, outcome);
                 }
                 default -> throw new IllegalStateException(
-                        "无法识别的通知方法签名（支持零参、JoinPoint 单参或 JoinPoint + 上下文两参）：" + advice);
+                        "无法识别的通知方法签名（支持零参、JoinPoint 单参或 JoinPoint + 上下文两参）：" + adviceMethod);
             }
         }
 
         private Object invokeAround(Advisor advisor, ProceedingJoinPoint joinPoint) throws Throwable {
-            Method advice = advisor.adviceMethod();
-            if (advice.getParameterCount() != 1
-                    || !advice.getParameterTypes()[0].isAssignableFrom(ProceedingJoinPoint.class)) {
-                throw new IllegalStateException("@Around 通知方法必须声明一个 ProceedingJoinPoint 参数：" + advice);
+            Method adviceMethod = advisor.adviceMethod();
+            if (adviceMethod.getParameterCount() != 1
+                    || !adviceMethod.getParameterTypes()[0].isAssignableFrom(ProceedingJoinPoint.class)) {
+                throw new IllegalStateException("@Around 通知方法必须声明一个 ProceedingJoinPoint 参数：" + adviceMethod);
             }
-            return invoke(advisor, joinPoint);
+            return invokeAdviceMethod(advisor, joinPoint);
         }
 
-        private Object invoke(Advisor advisor, Object... args) throws Throwable {
+        private Object invokeAdviceMethod(Advisor advisor, Object... args) throws Throwable {
             try {
-                Method advice = advisor.adviceMethod();
-                advice.setAccessible(true);
-                return advice.invoke(advisor.aspectInstance(), args);
+                Method adviceMethod = advisor.adviceMethod();
+                adviceMethod.setAccessible(true);
+                return adviceMethod.invoke(advisor.aspectInstance(), args);
             } catch (InvocationTargetException e) {
                 throw e.getCause();
             }

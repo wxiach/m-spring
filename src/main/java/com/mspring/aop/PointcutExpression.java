@@ -6,6 +6,8 @@ import java.util.regex.Pattern;
 
 /**
  * 切点表达式：execution(* 类名模式.方法名模式(..))；类名中 * 匹配一段、.. 匹配任意深度的包，方法名按正则处理
+ *
+ * @author wxiach <wxiach@gmail.com> 2026/10/23
  */
 public class PointcutExpression {
 
